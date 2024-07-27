@@ -1,0 +1,116 @@
+from web3 import Web3
+import requests
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
+
+class TokenThrive:
+    def __init__(self, infura_url: str, coingecko_api_url: str = 'https://api.coingecko.com/api/v3'):
+        self.web3 = Web3(Web3.HTTPProvider(infura_url))
+        if not self.web3.isConnected():
+            raise Exception("Failed to connect to the Ethereum node")
+        self.coingecko_api_url = coingecko_api_url
+
+    # Ethereum methods
+    def get_token_balance(self, address: str, token_contract_address: str, token_decimals: int) -> float:
+        contract = self.web3.eth.contract(address=token_contract_address, abi=self.erc20_abi())
+        balance = contract.functions.balanceOf(address).call()
+        return balance / (10 ** token_decimals)
+
+    def erc20_abi(self):
+        return [
+            {
+                "constant": True,
+                "inputs": [{"name": "_owner", "type": "address"}],
+                "name": "balanceOf",
+                "outputs": [{"name": "balance", "type": "uint256"}],
+                "type": "function",
+            }
+        ]
+
+    # CoinGecko methods
+    def get_token_details(self, token_id: str) -> dict:
+        url = f"{self.coingecko_api_url}/coins/{token_id}"
+        response = requests.get(url)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {"error": "Token not found"}
+
+    def get_price_data(self, token_id: str, vs_currency: str = 'usd', days: int = 30) -> pd.DataFrame:
+        url = f"{self.coingecko_api_url}/coins/{token_id}/market_chart?vs_currency={vs_currency}&days={days}"
+        response = requests.get(url)
+        data = response.json()
+
+        prices = data['prices']
+        df = pd.DataFrame(prices, columns=['timestamp', 'price'])
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        return df
+
+    def plot_price_data(self, token_id: str, vs_currency: str = 'usd', days: int = 30):
+        df = self.get_price_data(token_id, vs_currency, days)
+        plt.figure(figsize=(12, 6))
+        plt.plot(df['timestamp'], df['price'])
+        plt.title(f'{token_id.capitalize()} Price over the last {days} days')
+        plt.xlabel('Date')
+        plt.ylabel(f'Price ({vs_currency.upper()})')
+        plt.grid(True)
+        plt.show()
+
+    # Portfolio methods
+    def manage_portfolio(self, portfolio: dict, vs_currency: str = 'usd', days: int = 30):
+        portfolio_df = pd.DataFrame()
+
+        for token_id, token_info in portfolio.items():
+            address = token_info['address']
+            token_contract_address = token_info['contract_address']
+            token_decimals = token_info['decimals']
+            amount = self.get_token_balance(address, token_contract_address, token_decimals)
+
+            df = self.get_price_data(token_id, vs_currency, days)
+            df['token_id'] = token_id
+            df['amount'] = amount
+            df['value'] = df['price'] * amount
+            portfolio_df = portfolio_df.append(df, ignore_index=True)
+        
+        portfolio_summary = portfolio_df.groupby('timestamp')['value'].sum().reset_index()
+        
+        plt.figure(figsize=(12, 6))
+        plt.plot(portfolio_summary['timestamp'], portfolio_summary['value'])
+        plt.title(f'Portfolio Value over the last {days} days')
+        plt.xlabel('Date')
+        plt.ylabel(f'Value ({vs_currency.upper()})')
+        plt.grid(True)
+        plt.show()
+
+        return portfolio_summary
+
+# Example Usage
+if __name__ == "__main__":
+    INFURA_URL = 'https://mainnet.infura.io/v3/YOUR_INFURA_PROJECT_ID'
+    token_thrive = TokenThrive(INFURA_URL)
+
+    # Fetch Token Details from CoinGecko
+    token_id = 'ethereum'
+    token_details = token_thrive.get_token_details(token_id)
+    print("Token Details:", token_details)
+
+    # Fetch and Plot Price Data
+    token_thrive.plot_price_data(token_id, days=30)
+
+    # Manage and Plot Portfolio
+    portfolio = {
+        'ethereum': {
+            'address': '0xYourEthereumAddressHere',
+            'contract_address': '0xYourTokenContractAddressHere',
+            'decimals': 18
+        },
+        'dai': {
+            'address': '0xYourEthereumAddressHere',
+            'contract_address': '0x6B175474E89094C44Da98b954EedeAC495271d0F',  # DAI contract address
+            'decimals': 18
+        }
+    }
+    portfolio_summary = token_thrive.manage_portfolio(portfolio, days=30)
+    print("Portfolio Summary:")
+    print(portfolio_summary)
